@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Home, ListOrdered, PlusCircle, Users, LogOut, Pencil, Trash2,
-  Lock, ArrowUpCircle, ArrowDownCircle, ShieldCheck, UserPlus
+  Lock, ArrowUpCircle, ArrowDownCircle, ShieldCheck, UserPlus, Wallet
 } from "lucide-react";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { db } from "./firebase";
@@ -157,6 +157,7 @@ export default function LosTragediasApp() {
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [cuotas, setCuotas] = useState([]);
   const [sessionUserId, setSessionUserId] = useState(null);
   const [view, setView] = useState("resumen");
   const [editingTx, setEditingTx] = useState(null);
@@ -165,8 +166,9 @@ export default function LosTragediasApp() {
   useEffect(() => {
     let membersLoaded = false;
     let txLoaded = false;
+    let cuotasLoaded = false;
     const checkLoaded = () => {
-      if (membersLoaded && txLoaded) setLoading(false);
+      if (membersLoaded && txLoaded && cuotasLoaded) setLoading(false);
     };
 
     const unsubMembers = onSnapshot(doc(db, "house", "members"), (snap) => {
@@ -179,22 +181,33 @@ export default function LosTragediasApp() {
       txLoaded = true;
       checkLoaded();
     });
+    const unsubCuotas = onSnapshot(doc(db, "house", "cuotas"), (snap) => {
+      setCuotas(snap.exists() ? snap.data().list || [] : []);
+      cuotasLoaded = true;
+      checkLoaded();
+    });
 
     return () => {
       unsubMembers();
       unsubTx();
+      unsubCuotas();
     };
   }, []);
 
   const currentUser = members.find((m) => m.id === sessionUserId) || null;
   const canWrite = currentUser && (currentUser.role === "admin" || currentUser.role === "editor");
   const canManage = currentUser && currentUser.role === "admin";
+  const inCuotas = !!currentUser && cuotas.some((c) => c.memberId === currentUser.id);
+  const canSeeCuotas = canManage || inCuotas;
 
   async function persistMembers(next) {
     await setDoc(doc(db, "house", "members"), { list: next });
   }
   async function persistTransactions(next) {
     await setDoc(doc(db, "house", "transactions"), { list: next });
+  }
+  async function persistCuotas(next) {
+    await setDoc(doc(db, "house", "cuotas"), { list: next });
   }
 
   function logout() {
@@ -307,6 +320,14 @@ export default function LosTragediasApp() {
             onSave={persistMembers}
           />
         )}
+        {view === "cuotas" && canSeeCuotas && (
+          <CuotasView
+            members={members}
+            cuotas={cuotas}
+            canManage={canManage}
+            onSave={persistCuotas}
+          />
+        )}
       </div>
 
       <div className="lt-rule" style={{ display: "flex", justifyContent: "space-around", padding: "0.4rem 0", background: "#0F1214" }}>
@@ -314,6 +335,9 @@ export default function LosTragediasApp() {
         <NavBtn icon={ListOrdered} label="Apuntes" active={view === "movimientos"} onClick={() => setView("movimientos")} />
         {canWrite && (
           <NavBtn icon={PlusCircle} label="Añadir" active={view === "anadir"} onClick={() => { setEditingTx(null); setView("anadir"); }} />
+        )}
+        {canSeeCuotas && (
+          <NavBtn icon={Wallet} label="Cuotas" active={view === "cuotas"} onClick={() => setView("cuotas")} />
         )}
         {canManage && (
           <NavBtn icon={Users} label="Casa" active={view === "miembros"} onClick={() => setView("miembros")} />
@@ -676,6 +700,161 @@ function MiembrosView({ members, currentUser, onSave }) {
         <ShieldCheck size={14} style={{ flexShrink: 0, marginTop: "0.1rem" }} />
         <span>Administrador: gestiona la casa y los apuntes. Editor: añade y edita apuntes. Lector: solo puede consultar.</span>
       </div>
+    </div>
+  );
+}
+
+function fmtMonth(mes) {
+  if (!mes) return "—";
+  const d = new Date(mes + "-01T00:00:00");
+  if (isNaN(d)) return mes;
+  const s = d.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function CuotasView({ members, cuotas, canManage, onSave }) {
+  const [addingMemberId, setAddingMemberId] = useState("");
+  const [addingAmount, setAddingAmount] = useState("");
+  const [addingMonth, setAddingMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [editingId, setEditingId] = useState(null);
+  const [editAmount, setEditAmount] = useState("");
+  const [editMonth, setEditMonth] = useState("");
+  const [err, setErr] = useState("");
+
+  const nameOf = (id) => members.find((m) => m.id === id)?.name || "—";
+  const sorted = [...cuotas].sort((a, b) => nameOf(a.memberId).localeCompare(nameOf(b.memberId)));
+  const available = members.filter((m) => !cuotas.some((c) => c.memberId === m.id));
+  const total = cuotas.reduce((sum, c) => sum + (Number(c.monto) || 0), 0);
+
+  function addEntry() {
+    if (!addingMemberId) return setErr("Elige una persona.");
+    const amt = parseFloat(addingAmount.replace(",", "."));
+    if (!amt || amt <= 0) return setErr("Introduce un importe válido.");
+    setErr("");
+    onSave([
+      ...cuotas,
+      { id: uid(), memberId: addingMemberId, monto: amt, mes: addingMonth, updatedAt: new Date().toISOString() },
+    ]);
+    setAddingMemberId("");
+    setAddingAmount("");
+    setAddingMonth(new Date().toISOString().slice(0, 7));
+  }
+
+  function startEdit(entry) {
+    setErr("");
+    setEditingId(entry.id);
+    setEditAmount(String(entry.monto));
+    setEditMonth(entry.mes || new Date().toISOString().slice(0, 7));
+  }
+
+  function saveEdit(entry) {
+    const amt = parseFloat(editAmount.replace(",", "."));
+    if (!amt || amt <= 0) return setErr("Introduce un importe válido.");
+    setErr("");
+    onSave(
+      cuotas.map((c) =>
+        c.id === entry.id ? { ...c, monto: amt, mes: editMonth, updatedAt: new Date().toISOString() } : c
+      )
+    );
+    setEditingId(null);
+  }
+
+  function removeEntry(id) {
+    onSave(cuotas.filter((c) => c.id !== id));
+    if (editingId === id) setEditingId(null);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
+      <div>
+        <p className="lt-serif" style={{ fontSize: "1.1rem", fontWeight: 600, margin: "0 0 0.2rem" }}>Cuotas mensuales</p>
+        <p style={{ fontSize: "0.78rem", color: "var(--ink-soft)", margin: 0 }}>
+          Apartado privado, visible solo para las personas seleccionadas.
+        </p>
+      </div>
+
+      {sorted.length === 0 && (
+        <div className="lt-card" style={{ textAlign: "center", padding: "1.2rem 1rem" }}>
+          <p style={{ fontSize: "0.82rem", color: "var(--ink-soft)", margin: 0 }}>
+            {canManage ? "Añade a la primera persona más abajo." : "Todavía no hay cuotas registradas."}
+          </p>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        {sorted.map((entry) => {
+          const isEditing = editingId === entry.id;
+          return (
+            <div key={entry.id} className="lt-card" style={{ padding: "0.65rem 0.85rem" }}>
+              {isEditing ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  <p style={{ fontSize: "0.85rem", fontWeight: 500, margin: 0 }}>{nameOf(entry.memberId)}</p>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <input className="lt-input" value={editAmount} inputMode="decimal" onChange={(e) => setEditAmount(e.target.value)} placeholder="0,00" />
+                    <input className="lt-input" type="month" style={{ flexShrink: 0, width: "auto" }} value={editMonth} onChange={(e) => setEditMonth(e.target.value)} />
+                  </div>
+                  {err && <p style={{ fontSize: "0.78rem", color: "var(--rust)", margin: 0 }}>{err}</p>}
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <button className="lt-btn-ghost lt-btn" style={{ flex: 1, padding: "0.4rem" }} onClick={() => { setEditingId(null); setErr(""); }}>Cancelar</button>
+                    <button className="lt-btn" style={{ flex: 1, padding: "0.4rem" }} onClick={() => saveEdit(entry)}>Guardar</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <p style={{ fontSize: "0.88rem", fontWeight: 500, margin: 0 }}>{nameOf(entry.memberId)}</p>
+                    <p style={{ fontSize: "0.72rem", color: "var(--ink-soft)", margin: "0.15rem 0 0" }}>{fmtMonth(entry.mes)}</p>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                    <span className="lt-mono" style={{ fontSize: "0.95rem", fontWeight: 600 }}>{fmtMoney(entry.monto)}</span>
+                    {canManage && (
+                      <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <button aria-label="Editar" onClick={() => startEdit(entry)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}>
+                          <Pencil size={15} />
+                        </button>
+                        <button aria-label="Eliminar" onClick={() => removeEntry(entry.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--rust)" }}>
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {sorted.length > 0 && (
+        <div className="lt-rule" style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem 0.1rem" }}>
+          <span style={{ fontSize: "0.8rem", color: "var(--ink-soft)" }}>Total mensual</span>
+          <span className="lt-mono" style={{ fontSize: "0.9rem", fontWeight: 600 }}>{fmtMoney(total)}</span>
+        </div>
+      )}
+
+      {canManage && (
+        <div>
+          <p className="lt-serif" style={{ fontSize: "1rem", fontWeight: 600, margin: "0 0 0.5rem", display: "flex", alignItems: "center", gap: "0.35rem" }}>
+            <UserPlus size={16} /> Añadir persona a cuotas
+          </p>
+          {available.length === 0 ? (
+            <p style={{ fontSize: "0.78rem", color: "var(--ink-soft)" }}>Todas las personas de la casa ya están en este apartado.</p>
+          ) : (
+            <div className="lt-card" style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+              <select className="lt-input" value={addingMemberId} onChange={(e) => setAddingMemberId(e.target.value)}>
+                <option value="">Elige una persona</option>
+                {available.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <input className="lt-input" value={addingAmount} inputMode="decimal" onChange={(e) => setAddingAmount(e.target.value)} placeholder="Cuota (€)" />
+                <input className="lt-input" type="month" style={{ flexShrink: 0, width: "auto" }} value={addingMonth} onChange={(e) => setAddingMonth(e.target.value)} />
+              </div>
+              {err && <p style={{ fontSize: "0.78rem", color: "var(--rust)", margin: 0 }}>{err}</p>}
+              <button className="lt-btn" onClick={addEntry}>Añadir</button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

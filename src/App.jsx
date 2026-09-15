@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Home, ListOrdered, PlusCircle, Users, LogOut, Pencil, Trash2,
-  Lock, ArrowUpCircle, ArrowDownCircle, ShieldCheck, UserPlus, Wallet
+  Lock, ArrowUpCircle, ArrowDownCircle, ShieldCheck, UserPlus, Check, X,
+  ClipboardCheck, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { db } from "./firebase";
@@ -14,6 +15,22 @@ const INCOME_CATEGORIES = [
 ];
 
 const ROLE_LABEL = { admin: "Administrador", editor: "Editor", viewer: "Lector" };
+
+const MESES_CICLO = ["Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre", "Enero", "Febrero", "Marzo", "Abril", "Mayo"];
+const PAGADORES_MENSUALIDAD = ["Grande", "Roberto", "Enrique", "Paco", "Jorge"];
+
+function cicloActualPorDefecto() {
+  const now = new Date();
+  const m = now.getMonth();
+  const y = now.getFullYear();
+  const startYear = m >= 5 ? y : y - 1;
+  return `${startYear}-${startYear + 1}`;
+}
+
+function mesActualEnCiclo() {
+  const m = new Date().getMonth();
+  return m >= 5 ? m - 5 : m + 7;
+}
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -157,7 +174,7 @@ export default function LosTragediasApp() {
   const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState([]);
   const [transactions, setTransactions] = useState([]);
-  const [cuotas, setCuotas] = useState([]);
+  const [payments, setPayments] = useState({});
   const [sessionUserId, setSessionUserId] = useState(null);
   const [view, setView] = useState("resumen");
   const [editingTx, setEditingTx] = useState(null);
@@ -166,9 +183,9 @@ export default function LosTragediasApp() {
   useEffect(() => {
     let membersLoaded = false;
     let txLoaded = false;
-    let cuotasLoaded = false;
+    let paymentsLoaded = false;
     const checkLoaded = () => {
-      if (membersLoaded && txLoaded && cuotasLoaded) setLoading(false);
+      if (membersLoaded && txLoaded && paymentsLoaded) setLoading(false);
     };
 
     const unsubMembers = onSnapshot(doc(db, "house", "members"), (snap) => {
@@ -181,24 +198,23 @@ export default function LosTragediasApp() {
       txLoaded = true;
       checkLoaded();
     });
-    const unsubCuotas = onSnapshot(doc(db, "house", "cuotas"), (snap) => {
-      setCuotas(snap.exists() ? snap.data().list || [] : []);
-      cuotasLoaded = true;
+    const unsubPayments = onSnapshot(doc(db, "house", "payments"), (snap) => {
+      setPayments(snap.exists() ? snap.data().data || {} : {});
+      paymentsLoaded = true;
       checkLoaded();
     });
 
     return () => {
       unsubMembers();
       unsubTx();
-      unsubCuotas();
+      unsubPayments();
     };
   }, []);
 
   const currentUser = members.find((m) => m.id === sessionUserId) || null;
   const canWrite = currentUser && (currentUser.role === "admin" || currentUser.role === "editor");
   const canManage = currentUser && currentUser.role === "admin";
-  const inCuotas = !!currentUser && cuotas.some((c) => c.memberId === currentUser.id);
-  const canSeeCuotas = canManage || inCuotas;
+  const canSeeCuotas = currentUser && currentUser.seeCuotas !== false;
 
   async function persistMembers(next) {
     await setDoc(doc(db, "house", "members"), { list: next });
@@ -206,8 +222,8 @@ export default function LosTragediasApp() {
   async function persistTransactions(next) {
     await setDoc(doc(db, "house", "transactions"), { list: next });
   }
-  async function persistCuotas(next) {
-    await setDoc(doc(db, "house", "cuotas"), { list: next });
+  async function persistPayments(next) {
+    await setDoc(doc(db, "house", "payments"), { data: next });
   }
 
   function logout() {
@@ -296,6 +312,13 @@ export default function LosTragediasApp() {
             }}
           />
         )}
+        {view === "mensualidades" && canSeeCuotas && (
+          <MensualidadesView
+            payments={payments}
+            canWrite={canWrite}
+            onSave={persistPayments}
+          />
+        )}
         {view === "anadir" && canWrite && (
           <TransactionForm
             members={members}
@@ -320,24 +343,16 @@ export default function LosTragediasApp() {
             onSave={persistMembers}
           />
         )}
-        {view === "cuotas" && canSeeCuotas && (
-          <CuotasView
-            members={members}
-            cuotas={cuotas}
-            canManage={canManage}
-            onSave={persistCuotas}
-          />
-        )}
       </div>
 
       <div className="lt-rule" style={{ display: "flex", justifyContent: "space-around", padding: "0.4rem 0", background: "#0F1214" }}>
         <NavBtn icon={Home} label="Resumen" active={view === "resumen"} onClick={() => setView("resumen")} />
         <NavBtn icon={ListOrdered} label="Apuntes" active={view === "movimientos"} onClick={() => setView("movimientos")} />
+        {canSeeCuotas && (
+          <NavBtn icon={ClipboardCheck} label="Cuotas" active={view === "mensualidades"} onClick={() => setView("mensualidades")} />
+        )}
         {canWrite && (
           <NavBtn icon={PlusCircle} label="Añadir" active={view === "anadir"} onClick={() => { setEditingTx(null); setView("anadir"); }} />
-        )}
-        {canSeeCuotas && (
-          <NavBtn icon={Wallet} label="Cuotas" active={view === "cuotas"} onClick={() => setView("cuotas")} />
         )}
         {canManage && (
           <NavBtn icon={Users} label="Casa" active={view === "miembros"} onClick={() => setView("miembros")} />
@@ -480,6 +495,216 @@ function ResumenView({ transactions }) {
             ))}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function MensualidadesView({ payments, canWrite, onSave }) {
+  const [cycle, setCycle] = useState(cicloActualPorDefecto());
+  const [monthIndex, setMonthIndex] = useState(mesActualEnCiclo());
+  const [editingName, setEditingName] = useState(null);
+  const [editingAmount, setEditingAmount] = useState("");
+  const [amountErr, setAmountErr] = useState("");
+
+  const cycleData = payments[cycle] || {};
+
+  function amountFor(name) {
+    const v = cycleData[name] && cycleData[name][MESES_CICLO[monthIndex]];
+    return typeof v === "number" ? v : 0;
+  }
+
+  function startEdit(name) {
+    if (!canWrite) return;
+    setEditingName(name);
+    const v = amountFor(name);
+    setEditingAmount(v > 0 ? String(v).replace(".", ",") : "");
+    setAmountErr("");
+  }
+
+  function cancelEdit() {
+    setEditingName(null);
+    setEditingAmount("");
+    setAmountErr("");
+  }
+
+  function saveEdit(name) {
+    const raw = editingAmount.trim();
+    const amt = raw === "" ? 0 : parseFloat(raw.replace(",", "."));
+    if (isNaN(amt) || amt < 0) {
+      setAmountErr("Introduce un importe válido (o déjalo vacío para marcar como pendiente).");
+      return;
+    }
+    const next = { ...payments };
+    const c = { ...(next[cycle] || {}) };
+    const person = { ...(c[name] || {}) };
+    person[MESES_CICLO[monthIndex]] = amt;
+    c[name] = person;
+    next[cycle] = c;
+    onSave(next);
+    setEditingName(null);
+    setEditingAmount("");
+    setAmountErr("");
+  }
+
+  function changeCycle(delta) {
+    const start = parseInt(cycle.split("-")[0], 10) + delta;
+    setCycle(`${start}-${start + 1}`);
+  }
+
+  const paidCount = PAGADORES_MENSUALIDAD.filter((n) => amountFor(n) > 0).length;
+  const totalMes = PAGADORES_MENSUALIDAD.reduce((s, n) => s + amountFor(n), 0);
+
+  function totalCicloPara(name) {
+    const person = cycleData[name] || {};
+    return MESES_CICLO.reduce((s, mes) => s + (typeof person[mes] === "number" ? person[mes] : 0), 0);
+  }
+  const totalCicloGeneral = PAGADORES_MENSUALIDAD.reduce((s, n) => s + totalCicloPara(n), 0);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <button aria-label="Curso anterior" onClick={() => changeCycle(-1)} style={{ background: "none", border: "none", color: "var(--ink-soft)", cursor: "pointer", display: "flex" }}>
+          <ChevronLeft size={18} />
+        </button>
+        <p className="lt-serif" style={{ fontWeight: 600, margin: 0 }}>Curso {cycle}</p>
+        <button aria-label="Curso siguiente" onClick={() => changeCycle(1)} style={{ background: "none", border: "none", color: "var(--ink-soft)", cursor: "pointer", display: "flex" }}>
+          <ChevronRight size={18} />
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: "0.4rem", overflowX: "auto", paddingBottom: "0.2rem" }}>
+        {MESES_CICLO.map((mes, i) => (
+          <button
+            key={mes}
+            onClick={() => { setMonthIndex(i); cancelEdit(); }}
+            style={{
+              flexShrink: 0,
+              padding: "0.35rem 0.7rem",
+              borderRadius: "999px",
+              border: "1px solid var(--line)",
+              background: i === monthIndex ? "var(--brass)" : "transparent",
+              color: i === monthIndex ? "#201404" : "var(--ink-soft)",
+              fontSize: "0.75rem",
+              fontWeight: i === monthIndex ? 600 : 400,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {mes.slice(0, 3)}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: "0.6rem" }}>
+        <div className="lt-card" style={{ flex: 1 }}>
+          <p style={{ fontSize: "0.72rem", color: "var(--ink-soft)", margin: 0 }}>{MESES_CICLO[monthIndex]} — pagado</p>
+          <p className="lt-mono" style={{ fontSize: "1.3rem", fontWeight: 600, margin: "0.2rem 0 0" }}>
+            {paidCount}/{PAGADORES_MENSUALIDAD.length}
+          </p>
+        </div>
+        <div className="lt-card" style={{ flex: 1 }}>
+          <p style={{ fontSize: "0.72rem", color: "var(--ink-soft)", margin: 0 }}>Total cobrado</p>
+          <p className="lt-mono" style={{ fontSize: "1.3rem", fontWeight: 600, margin: "0.2rem 0 0", color: "var(--moss)" }}>
+            {fmtMoney(totalMes)}
+          </p>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+        {PAGADORES_MENSUALIDAD.map((name) => {
+          const amt = amountFor(name);
+          const paid = amt > 0;
+          const isEditing = editingName === name;
+
+          if (isEditing) {
+            return (
+              <div key={name} className="lt-card" style={{ padding: "0.6rem 0.85rem" }}>
+                <p style={{ fontSize: "0.9rem", margin: "0 0 0.4rem" }}>{name}</p>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <input
+                    className="lt-input"
+                    style={{ flex: 1 }}
+                    value={editingAmount}
+                    inputMode="decimal"
+                    autoFocus
+                    placeholder="0,00 (vacío = pendiente)"
+                    onChange={(e) => setEditingAmount(e.target.value)}
+                  />
+                  <button aria-label="Guardar importe" onClick={() => saveEdit(name)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--moss)" }}>
+                    <Check size={18} />
+                  </button>
+                  <button aria-label="Cancelar" onClick={cancelEdit} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}>
+                    <X size={18} />
+                  </button>
+                </div>
+                {amountErr && <p style={{ fontSize: "0.72rem", color: "var(--rust)", margin: "0.4rem 0 0" }}>{amountErr}</p>}
+              </div>
+            );
+          }
+
+          return (
+            <button
+              key={name}
+              onClick={() => startEdit(name)}
+              disabled={!canWrite}
+              className="lt-card"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0.6rem 0.85rem",
+                border: paid ? "1px solid var(--moss)" : "1px solid var(--line)",
+                background: paid ? "rgba(116,180,137,0.12)" : "var(--bg-alt)",
+                cursor: canWrite ? "pointer" : "default",
+                textAlign: "left",
+                width: "100%",
+                font: "inherit",
+                color: "inherit",
+              }}
+            >
+              <span style={{ fontSize: "0.9rem" }}>{name}</span>
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.3rem",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  color: paid ? "var(--moss)" : "var(--ink-soft)",
+                }}
+              >
+                {paid ? (
+                  <>
+                    <Check size={15} /> {fmtMoney(amt)}
+                  </>
+                ) : (
+                  "Pendiente"
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div>
+        <p className="lt-serif" style={{ fontSize: "1rem", fontWeight: 600, margin: "0 0 0.5rem" }}>Resumen del curso {cycle}</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+          {PAGADORES_MENSUALIDAD.map((name) => (
+            <div key={name} className="lt-rule" style={{ display: "flex", justifyContent: "space-between", padding: "0.4rem 0.1rem" }}>
+              <span style={{ fontSize: "0.85rem" }}>{name}</span>
+              <span className="lt-mono" style={{ fontSize: "0.85rem", fontWeight: 600 }}>{fmtMoney(totalCicloPara(name))}</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem 0.1rem", marginTop: "0.2rem", borderTop: "1px solid var(--line)" }}>
+            <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>Total del curso</span>
+            <span className="lt-mono" style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--moss)" }}>{fmtMoney(totalCicloGeneral)}</span>
+          </div>
+        </div>
+      </div>
+
+      {!canWrite && (
+        <p style={{ fontSize: "0.72rem", color: "var(--ink-soft)" }}>Solo puedes consultar esta sección.</p>
       )}
     </div>
   );
@@ -631,6 +856,9 @@ function MiembrosView({ members, currentUser, onSave }) {
   const [pin, setPin] = useState("");
   const [role, setRole] = useState("editor");
   const [err, setErr] = useState("");
+  const [editingPinId, setEditingPinId] = useState(null);
+  const [editingPinValue, setEditingPinValue] = useState("");
+  const [pinErr, setPinErr] = useState("");
 
   function addMember() {
     if (!name.trim()) return setErr("Escribe un nombre.");
@@ -649,16 +877,80 @@ function MiembrosView({ members, currentUser, onSave }) {
     onSave(members.filter((m) => m.id !== id));
   }
 
+  function startEditPin(m) {
+    setEditingPinId(m.id);
+    setEditingPinValue(m.pin);
+    setPinErr("");
+  }
+
+  function cancelEditPin() {
+    setEditingPinId(null);
+    setEditingPinValue("");
+    setPinErr("");
+  }
+
+  function saveEditPin(id) {
+    if (!/^\d{4}$/.test(editingPinValue)) {
+      setPinErr("El PIN debe tener 4 dígitos.");
+      return;
+    }
+    onSave(members.map((m) => (m.id === id ? { ...m, pin: editingPinValue } : m)));
+    setEditingPinId(null);
+    setEditingPinValue("");
+    setPinErr("");
+  }
+
+  function toggleSeeCuotas(id) {
+    onSave(members.map((m) => (m.id === id ? { ...m, seeCuotas: m.seeCuotas === false } : m)));
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
       <div>
         <p className="lt-serif" style={{ fontSize: "1.1rem", fontWeight: 600, margin: "0 0 0.6rem" }}>Personas de la casa</p>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
           {members.map((m) => (
-            <div key={m.id} className="lt-card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem" }}>
+            <div key={m.id} className="lt-card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", flexWrap: "wrap", gap: "0.4rem" }}>
               <div>
                 <p style={{ fontSize: "0.85rem", fontWeight: 500, margin: 0 }}>{m.name}</p>
-                <p style={{ fontSize: "0.7rem", color: "var(--ink-soft)", margin: "0.1rem 0 0" }}>PIN {m.pin}</p>
+                {editingPinId === m.id ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginTop: "0.25rem" }}>
+                    <input
+                      className="lt-input"
+                      style={{ width: "5rem", padding: "0.25rem 0.4rem", fontSize: "0.75rem" }}
+                      value={editingPinValue}
+                      maxLength={4}
+                      inputMode="numeric"
+                      autoFocus
+                      onChange={(e) => setEditingPinValue(e.target.value.replace(/\D/g, ""))}
+                    />
+                    <button aria-label="Guardar PIN" onClick={() => saveEditPin(m.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--moss)" }}>
+                      <Check size={16} />
+                    </button>
+                    <button aria-label="Cancelar" onClick={cancelEditPin} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}>
+                      <X size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                    <p style={{ fontSize: "0.7rem", color: "var(--ink-soft)", margin: "0.1rem 0 0" }}>PIN {m.pin}</p>
+                    <button aria-label="Editar PIN" onClick={() => startEditPin(m)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)", display: "flex" }}>
+                      <Pencil size={12} />
+                    </button>
+                  </div>
+                )}
+                {editingPinId === m.id && pinErr && (
+                  <p style={{ fontSize: "0.7rem", color: "var(--rust)", margin: "0.25rem 0 0" }}>{pinErr}</p>
+                )}
+                <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.35rem", fontSize: "0.72rem", color: "var(--ink-soft)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={m.seeCuotas !== false}
+                    onChange={() => toggleSeeCuotas(m.id)}
+                    style={{ accentColor: "var(--brass)" }}
+                  />
+                  Puede ver Cuotas
+                </label>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <select className="lt-input" style={{ width: "auto", padding: "0.3rem 0.4rem", fontSize: "0.75rem" }} value={m.role} onChange={(e) => changeRole(m.id, e.target.value)}>
@@ -700,161 +992,6 @@ function MiembrosView({ members, currentUser, onSave }) {
         <ShieldCheck size={14} style={{ flexShrink: 0, marginTop: "0.1rem" }} />
         <span>Administrador: gestiona la casa y los apuntes. Editor: añade y edita apuntes. Lector: solo puede consultar.</span>
       </div>
-    </div>
-  );
-}
-
-function fmtMonth(mes) {
-  if (!mes) return "—";
-  const d = new Date(mes + "-01T00:00:00");
-  if (isNaN(d)) return mes;
-  const s = d.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function CuotasView({ members, cuotas, canManage, onSave }) {
-  const [addingMemberId, setAddingMemberId] = useState("");
-  const [addingAmount, setAddingAmount] = useState("");
-  const [addingMonth, setAddingMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [editingId, setEditingId] = useState(null);
-  const [editAmount, setEditAmount] = useState("");
-  const [editMonth, setEditMonth] = useState("");
-  const [err, setErr] = useState("");
-
-  const nameOf = (id) => members.find((m) => m.id === id)?.name || "—";
-  const sorted = [...cuotas].sort((a, b) => nameOf(a.memberId).localeCompare(nameOf(b.memberId)));
-  const available = members.filter((m) => !cuotas.some((c) => c.memberId === m.id));
-  const total = cuotas.reduce((sum, c) => sum + (Number(c.monto) || 0), 0);
-
-  function addEntry() {
-    if (!addingMemberId) return setErr("Elige una persona.");
-    const amt = parseFloat(addingAmount.replace(",", "."));
-    if (!amt || amt <= 0) return setErr("Introduce un importe válido.");
-    setErr("");
-    onSave([
-      ...cuotas,
-      { id: uid(), memberId: addingMemberId, monto: amt, mes: addingMonth, updatedAt: new Date().toISOString() },
-    ]);
-    setAddingMemberId("");
-    setAddingAmount("");
-    setAddingMonth(new Date().toISOString().slice(0, 7));
-  }
-
-  function startEdit(entry) {
-    setErr("");
-    setEditingId(entry.id);
-    setEditAmount(String(entry.monto));
-    setEditMonth(entry.mes || new Date().toISOString().slice(0, 7));
-  }
-
-  function saveEdit(entry) {
-    const amt = parseFloat(editAmount.replace(",", "."));
-    if (!amt || amt <= 0) return setErr("Introduce un importe válido.");
-    setErr("");
-    onSave(
-      cuotas.map((c) =>
-        c.id === entry.id ? { ...c, monto: amt, mes: editMonth, updatedAt: new Date().toISOString() } : c
-      )
-    );
-    setEditingId(null);
-  }
-
-  function removeEntry(id) {
-    onSave(cuotas.filter((c) => c.id !== id));
-    if (editingId === id) setEditingId(null);
-  }
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
-      <div>
-        <p className="lt-serif" style={{ fontSize: "1.1rem", fontWeight: 600, margin: "0 0 0.2rem" }}>Cuotas mensuales</p>
-        <p style={{ fontSize: "0.78rem", color: "var(--ink-soft)", margin: 0 }}>
-          Apartado privado, visible solo para las personas seleccionadas.
-        </p>
-      </div>
-
-      {sorted.length === 0 && (
-        <div className="lt-card" style={{ textAlign: "center", padding: "1.2rem 1rem" }}>
-          <p style={{ fontSize: "0.82rem", color: "var(--ink-soft)", margin: 0 }}>
-            {canManage ? "Añade a la primera persona más abajo." : "Todavía no hay cuotas registradas."}
-          </p>
-        </div>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-        {sorted.map((entry) => {
-          const isEditing = editingId === entry.id;
-          return (
-            <div key={entry.id} className="lt-card" style={{ padding: "0.65rem 0.85rem" }}>
-              {isEditing ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                  <p style={{ fontSize: "0.85rem", fontWeight: 500, margin: 0 }}>{nameOf(entry.memberId)}</p>
-                  <div style={{ display: "flex", gap: "0.5rem" }}>
-                    <input className="lt-input" value={editAmount} inputMode="decimal" onChange={(e) => setEditAmount(e.target.value)} placeholder="0,00" />
-                    <input className="lt-input" type="month" style={{ flexShrink: 0, width: "auto" }} value={editMonth} onChange={(e) => setEditMonth(e.target.value)} />
-                  </div>
-                  {err && <p style={{ fontSize: "0.78rem", color: "var(--rust)", margin: 0 }}>{err}</p>}
-                  <div style={{ display: "flex", gap: "0.5rem" }}>
-                    <button className="lt-btn-ghost lt-btn" style={{ flex: 1, padding: "0.4rem" }} onClick={() => { setEditingId(null); setErr(""); }}>Cancelar</button>
-                    <button className="lt-btn" style={{ flex: 1, padding: "0.4rem" }} onClick={() => saveEdit(entry)}>Guardar</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <p style={{ fontSize: "0.88rem", fontWeight: 500, margin: 0 }}>{nameOf(entry.memberId)}</p>
-                    <p style={{ fontSize: "0.72rem", color: "var(--ink-soft)", margin: "0.15rem 0 0" }}>{fmtMonth(entry.mes)}</p>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                    <span className="lt-mono" style={{ fontSize: "0.95rem", fontWeight: 600 }}>{fmtMoney(entry.monto)}</span>
-                    {canManage && (
-                      <div style={{ display: "flex", gap: "0.4rem" }}>
-                        <button aria-label="Editar" onClick={() => startEdit(entry)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ink-soft)" }}>
-                          <Pencil size={15} />
-                        </button>
-                        <button aria-label="Eliminar" onClick={() => removeEntry(entry.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--rust)" }}>
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {sorted.length > 0 && (
-        <div className="lt-rule" style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem 0.1rem" }}>
-          <span style={{ fontSize: "0.8rem", color: "var(--ink-soft)" }}>Total mensual</span>
-          <span className="lt-mono" style={{ fontSize: "0.9rem", fontWeight: 600 }}>{fmtMoney(total)}</span>
-        </div>
-      )}
-
-      {canManage && (
-        <div>
-          <p className="lt-serif" style={{ fontSize: "1rem", fontWeight: 600, margin: "0 0 0.5rem", display: "flex", alignItems: "center", gap: "0.35rem" }}>
-            <UserPlus size={16} /> Añadir persona a cuotas
-          </p>
-          {available.length === 0 ? (
-            <p style={{ fontSize: "0.78rem", color: "var(--ink-soft)" }}>Todas las personas de la casa ya están en este apartado.</p>
-          ) : (
-            <div className="lt-card" style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-              <select className="lt-input" value={addingMemberId} onChange={(e) => setAddingMemberId(e.target.value)}>
-                <option value="">Elige una persona</option>
-                {available.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <input className="lt-input" value={addingAmount} inputMode="decimal" onChange={(e) => setAddingAmount(e.target.value)} placeholder="Cuota (€)" />
-                <input className="lt-input" type="month" style={{ flexShrink: 0, width: "auto" }} value={addingMonth} onChange={(e) => setAddingMonth(e.target.value)} />
-              </div>
-              {err && <p style={{ fontSize: "0.78rem", color: "var(--rust)", margin: 0 }}>{err}</p>}
-              <button className="lt-btn" onClick={addEntry}>Añadir</button>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

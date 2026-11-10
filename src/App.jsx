@@ -62,11 +62,11 @@ const STYLE = `
   font-family: 'Inter', sans-serif;
   color: var(--ink);
   background: var(--bg);
+  position: fixed;
+  top: 0; bottom: 0; left: 0; right: 0;
+  width: 100%;
   max-width: 26rem;
   margin: 0 auto;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
@@ -147,7 +147,8 @@ const STYLE = `
 }
 .lt-navbtn.active { color: var(--ink); font-weight: 600; }
 .lt-navbtn.active svg { color: var(--brass); }
-.lt-scroll { overflow-y: auto; flex: 1; min-height: 0; }
+html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
+.lt-scroll { overflow-y: auto; flex: 1; min-height: 0; -webkit-overflow-scrolling: touch; }
 .lt-header, .lt-navbar { flex-shrink: 0; }
 .lt-type-toggle {
   display: flex;
